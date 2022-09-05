@@ -1,14 +1,23 @@
-// ignore: file_names
-import 'dart:math';
+import 'dart:convert';
 
+import 'dart:math';
+import 'package:http/http.dart' as http;
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:http/http.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'package:token_integration/Wallet/error.dart';
 import 'package:web3dart/web3dart.dart';
 
 class HomePage extends StatefulWidget {
-  const HomePage({Key? key}) : super(key: key);
+  final String privKey;
+  final String pubAddress;
+  const HomePage({
+    Key? key,
+    required this.privKey,
+    required this.pubAddress,
+  }) : super(key: key);
 
   @override
   _HomePageState createState() => _HomePageState();
@@ -20,15 +29,20 @@ class _HomePageState extends State<HomePage> {
   late Web3Client ethClient;
 
   //Polygon address
-  final String myAddress = "0x4818569AA9dE13d3cC1D702Cd10a95932799a674";
+  // final String myAddress = "0x4818569AA9dE13d3cC1D702Cd10a95932799a674";
 
   //url from alchemy
-  final String blockchainUrl = "https://polygon-mumbai.g.alchemy.com/v2/xhOSAQIFW6H_-NjxcSrpa1vJbwckXTUC";
+  final String blockchainUrl =
+      "https://polygon-mumbai.g.alchemy.com/v2/xhOSAQIFW6H_-NjxcSrpa1vJbwckXTUC";
 
   bool data = false;
   int myAmount = 0;
   int amt = 0;
+  int appAmt = 0;
+  int riderGas = 0;
   var addressTo = "";
+  var riderBalance = 0;
+  var maticBalance = '';
   var dec = pow(10, 18);
   var mydata;
   var mybalance;
@@ -36,20 +50,34 @@ class _HomePageState extends State<HomePage> {
   var balance;
   var name;
   var symbol;
+  final GlobalKey<ScaffoldState> _ScaffoldState = GlobalKey<ScaffoldState>();
 
   @override
   void initState() {
     httpClient = Client();
     ethClient = Web3Client(blockchainUrl, httpClient);
+
     super.initState();
     getName();
     getSymbol();
-    getBalance(myAddress);
+    getContractRdeem();
+    getBalance(widget.pubAddress);
+    getMaticBal();
   }
 
   Future<DeployedContract> getContract() async {
     String abiFile = await rootBundle.loadString("assets/token.json");
     String contractAddress = "0x50338cAF974F2ec1869020e83eF48E36aCE93caf";
+    final contract = DeployedContract(
+        ContractAbi.fromJson(abiFile, "FirstToken"),
+        EthereumAddress.fromHex(contractAddress));
+
+    return contract;
+  }
+
+  Future<DeployedContract> getContractRdeem() async {
+    String abiFile = await rootBundle.loadString("assets/multitransfer.json");
+    String contractAddress = "0x5d6243990Ce6159De35D2A163dFD256eABAc3537";
     final contract = DeployedContract(
         ContractAbi.fromJson(abiFile, "FirstToken"),
         EthereumAddress.fromHex(contractAddress));
@@ -75,7 +103,6 @@ class _HomePageState extends State<HomePage> {
     // print('In getGreeting');
     List<dynamic> result = await query('balanceOf', [address]);
 
-    print('In getGreeting');
     print(result[0]);
 
     mybalance = result[0];
@@ -114,16 +141,24 @@ class _HomePageState extends State<HomePage> {
     DeployedContract contract = await getContract();
     final ethFunction = contract.function(functionName);
     snackBar(label: "Recording tranction");
-    EthPrivateKey key = EthPrivateKey.fromHex(
-        "52bd70b92aa91ec932a6224dc9fad8b11b8fb22261bdcf9f74a2d9c560ffbd08");
+    EthPrivateKey key = EthPrivateKey.fromHex(widget.privKey);
     Transaction transaction = await Transaction.callContract(
         contract: contract,
         function: ethFunction,
         parameters: args,
         maxGas: 100000);
     print(transaction.nonce);
-    final result = await ethClient.sendTransaction(key, transaction,
-        fetchChainIdFromNetworkId: true, chainId: null);
+    final result = await ethClient
+        .sendTransaction(key, transaction,
+            fetchChainIdFromNetworkId: true, chainId: null)
+        .catchError((Object e, StackTrace stackTrace) async {
+      Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (BuildContext context) => ErrorPage(
+                    e: e.toString(),
+                  )));
+    });
     print(result);
     ScaffoldMessenger.of(context).removeCurrentSnackBar();
     snackBar(label: "verifying transaction");
@@ -131,7 +166,43 @@ class _HomePageState extends State<HomePage> {
     Future.delayed(const Duration(seconds: 20), () {
       ScaffoldMessenger.of(context).removeCurrentSnackBar();
       snackBar(label: "retriving balance");
-      getBalance(myAddress);
+      getBalance(widget.pubAddress);
+      ScaffoldMessenger.of(context).clearSnackBars();
+    });
+    return result;
+  }
+
+  Future<String> submitRedeem(String functionName, List<dynamic> args) async {
+    DeployedContract contract = await getContractRdeem();
+    final ethFunction = contract.function(functionName);
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    snackBar(label: "Recording Exchange");
+    EthPrivateKey key = EthPrivateKey.fromHex(widget.privKey);
+    Transaction transaction = await Transaction.callContract(
+        contract: contract,
+        function: ethFunction,
+        parameters: args,
+        maxGas: 100000);
+    print(transaction.nonce);
+    final result = await ethClient
+        .sendTransaction(key, transaction,
+            fetchChainIdFromNetworkId: true, chainId: null)
+        .catchError((Object e, StackTrace stackTrace) async {
+      Navigator.push(
+          context,
+          MaterialPageRoute(
+              builder: (BuildContext context) => ErrorPage(
+                    e: e.toString(),
+                  )));
+    });
+    print(result);
+    ScaffoldMessenger.of(context).removeCurrentSnackBar();
+    snackBar(label: "verifying Exchange");
+    //set a 20 seconds delay to allow the transaction to be verified before trying to retrieve the balance
+    Future.delayed(const Duration(seconds: 20), () {
+      ScaffoldMessenger.of(context).removeCurrentSnackBar();
+      snackBar(label: "retriving balance");
+      getBalance(widget.pubAddress);
       ScaffoldMessenger.of(context).clearSnackBars();
     });
     return result;
@@ -156,10 +227,10 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<String> reciveCoin() async {
-    EthereumAddress addressTo =
-        EthereumAddress.fromHex("0x4818569AA9dE13d3cC1D702Cd10a95932799a674");
+    EthereumAddress addressTo = EthereumAddress.fromHex(widget.pubAddress);
     var bigAmount = BigInt.from(myAmount);
     var response = await submit('mint', [addressTo, bigAmount]);
+
     print('Recieved');
     transHash = response;
     setState(() {});
@@ -167,14 +238,66 @@ class _HomePageState extends State<HomePage> {
   }
 
   Future<String> transferCoin() async {
-    var amount = BigInt.from(amt *dec);
+    var amount = BigInt.from(amt * 10000000000000000).toInt();
+    var am = BigInt.from(amount * 100);
     EthereumAddress to = EthereumAddress.fromHex(addressTo);
-    print("amo: $amount");
-    var response = await submit('transfer', [to, amount]);
+    print("amo: $am");
+    var response = await submit('transfer', [to, am]);
+    print('Transfered');
+    transHash = response;
+    setState(() {});
+    return "response";
+  }
+
+  Future<String> approve() async {
+    String appadd = "0x5d6243990Ce6159De35D2A163dFD256eABAc3537";
+    EthereumAddress add = EthereumAddress.fromHex(appadd);
+    var amount = BigInt.from(appAmt * 10000000000000000).toInt();
+    var am = BigInt.from(amount * 100);
+    var response = await submit('approve', [add, am]);
     print('Transfered');
     transHash = response;
     setState(() {});
     return response;
+  }
+
+  Future<String> exchange() async {
+    String add = "0x50338cAF974F2ec1869020e83eF48E36aCE93caf";
+    EthereumAddress tokenAddress = EthereumAddress.fromHex(add);
+    var redeemAmt = BigInt.from(appAmt);
+    var response = await submitRedeem("claimTicket", [tokenAddress, redeemAmt]);
+    print("Exchange complete");
+    transHash = response;
+    setState(() {});
+    return response;
+  }
+
+  setGasRiderBalance() {
+    riderBalance = riderGas + appAmt;
+    print(balance);
+    return balance;
+  }
+
+  getMaticBal() async {
+    Uri url = Uri.https(
+      "api-eu1.tatum.io",
+      "/v3/polygon/account/balance/${widget.pubAddress}",
+    );
+
+    Map<String, String> headers = {
+      "content-Type": "application/json",
+      "x-api-key": "c7d214a0-497a-490d-a272-3199ce208c0d"
+    };
+
+    http.Response response = await http.get(url, headers: headers);
+    var results = jsonDecode(response.body);
+    if (response.statusCode == 200) {
+      maticBalance = results['balance'];
+      print(results);
+    } else {
+      print(response.statusCode);
+      print(response.body);
+    }
   }
 
   @override
@@ -182,6 +305,7 @@ class _HomePageState extends State<HomePage> {
     FocusNode nodeOne = FocusNode();
     FocusNode nodeTwo = FocusNode();
     return Scaffold(
+      key: _ScaffoldState,
       body: Stack(children: [
         Positioned(
           left: 0.0,
@@ -191,10 +315,10 @@ class _HomePageState extends State<HomePage> {
               mainAxisAlignment: MainAxisAlignment.center,
               children: [
                 Padding(
-                  padding: const EdgeInsets.only(top: 50.0),
+                  padding: const EdgeInsets.only(top: 40.0),
                   child: data
                       ? Text(
-                          ' $balance $symbol',
+                          ' $balance $symbol / $riderBalance Rider Gas',
                           style: const TextStyle(
                               color: Colors.white,
                               fontWeight: FontWeight.w500,
@@ -202,6 +326,10 @@ class _HomePageState extends State<HomePage> {
                         )
                       : const CircularProgressIndicator(),
                 ),
+                const SizedBox(
+                  height: 10,
+                ),
+                Text(widget.pubAddress),
                 const SizedBox(
                   height: 40,
                 ),
@@ -240,6 +368,7 @@ class _HomePageState extends State<HomePage> {
                                                   onChanged: (value) {
                                                     amt = int.parse(value)
                                                         .round();
+
                                                     print('uuu');
                                                     print(amt);
                                                     setState(() {});
@@ -258,18 +387,24 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                         actions: [
                                           CupertinoDialogAction(
-                                              child: RaisedButton(
+                                              child: TextButton(
                                             child: const Text(
                                               "Send",
                                               style: TextStyle(
                                                   fontWeight: FontWeight.bold,
                                                   color: Colors.white),
                                             ),
-                                            color: Colors.redAccent,
-                                            hoverColor: Colors.white,
-                                            elevation: 5,
+                                            style: TextButton.styleFrom(
+                                              primary: Colors.redAccent,
+                                              // hoverColor: Colors.white,
+                                              elevation: 5,
+                                            ),
                                             onPressed: () {
-                                              transferCoin();
+                                              transferCoin().catchError(
+                                                  (Object e,
+                                                      StackTrace stackTrace) {
+                                                print(e.toString());
+                                              });
                                               Navigator.pop(context);
                                             },
                                           ))
@@ -308,18 +443,21 @@ class _HomePageState extends State<HomePage> {
                                         ),
                                         actions: [
                                           CupertinoDialogAction(
-                                              child: RaisedButton(
+                                              child: TextButton(
                                             child: const Text(
                                               "recieve",
                                               style: TextStyle(
                                                   fontWeight: FontWeight.bold,
                                                   color: Colors.white),
                                             ),
-                                            color: Colors.green,
-                                            hoverColor: Colors.white,
-                                            elevation: 5,
+                                            style: TextButton.styleFrom(
+                                              primary: Colors.green,
+                                              // hoverColor: Colors.white,
+                                              elevation: 5,
+                                            ),
                                             onPressed: () {
                                               reciveCoin();
+                                              print("ykb ${e.toString()}");
                                               Navigator.pop(context);
                                             },
                                           ))
@@ -385,12 +523,60 @@ class _HomePageState extends State<HomePage> {
                 thickness: 1,
                 height: 1,
               ),
+              Row(
+                mainAxisAlignment: MainAxisAlignment.spaceAround,
+                children: [
+                  const Text(
+                    "Polygon",
+                    style: TextStyle(
+                      fontWeight: FontWeight.w400,
+                      fontSize: 17,
+                    ),
+                  ),
+                  Text(
+                    "$maticBalance MATIC",
+                    style: const TextStyle(
+                      fontWeight: FontWeight.w400,
+                      fontSize: 17,
+                    ),
+                  )
+                ],
+              ),
+              const SizedBox(
+                height: 5,
+              ),
+              const Divider(
+                color: Colors.grey,
+                thickness: 1,
+                height: 1,
+              ),
+              Material(
+                child: TextField(
+                    onChanged: (value) {
+                      appAmt = int.parse(value).round();
+                      print('value');
+                      print(appAmt);
+                    },
+                    focusNode: nodeOne,
+                    decoration: const InputDecoration(
+                        hintText: "Amount", border: OutlineInputBorder())),
+              ),
+              SizedBox(height: 10),
+              TextButton.icon(
+                  onPressed: () async {
+                    getMaticBal();
+                    // approve().then((value) => exchange()
+                    //     .then((value) => setGasRiderBalance())
+                    //     .then((value) => setState(() {})));
+                  },
+                  icon: const Icon(Icons.currency_exchange_rounded),
+                  label: const Text('Redeem Rider Gas Token for Rider Gas'))
             ]),
           ),
-        )
+        ),
       ]),
       floatingActionButton: FloatingActionButton(
-        onPressed: (() => getBalance(myAddress)),
+        onPressed: (() => getBalance(widget.pubAddress)),
         child: const Icon(Icons.refresh_outlined),
       ),
     );
